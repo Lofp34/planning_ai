@@ -1,0 +1,58 @@
+---
+alwaysApply: true
+description: Règles pour l'utilisation de l'API Gemini de Google avec le code officiel
+---
+
+# Utilisation de l'API Gemini de Google
+
+## Code Officiel de Référence
+
+Le code officiel pour l'API Gemini de Google est :
+
+```typescript
+import { GoogleGenAI } from "@google/genai";
+
+// Le client récupère la clé API depuis la variable d'environnement `GEMINI_API_KEY`.
+const ai = new GoogleGenAI({});
+
+async function main() {
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: "Explain how AI works in a few words",
+  });
+  console.log(response.text);
+}
+
+main();
+```
+
+## Règles d'Implémentation
+
+1. **Initialisation du client** : Utiliser `new GoogleGenAI({})` sans passer de clé API en paramètre
+2. **Variable d'environnement** : La clé API doit être définie dans la variable d'environnement `GEMINI_API_KEY`
+3. **Modèle recommandé** : Utiliser `"gemini-2.5-flash"` comme modèle par défaut
+4. **Structure de requête** : Utiliser `ai.models.generateContent()` avec les paramètres `model` et `contents`
+5. **Récupération de la réponse** : Accéder au texte via `response.text`
+
+## Configuration Vite
+
+Dans [vite.config.ts](mdc:vite.config.ts), s'assurer que la variable d'environnement est correctement définie :
+
+```typescript
+define: {
+  'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
+}
+```
+
+## Variables d'Environnement
+
+Créer un fichier `.env` à la racine du projet avec :
+```
+GEMINI_API_KEY=votre_clé_api_gemini
+```
+
+## Erreurs Courantes à Éviter
+
+- Ne pas passer la clé API directement dans le constructeur `GoogleGenAI()`
+- Ne pas utiliser `process.env.API_KEY` au lieu de `process.env.GEMINI_API_KEY`
+- S'assurer que la variable d'environnement est bien définie avant l'initialisation
