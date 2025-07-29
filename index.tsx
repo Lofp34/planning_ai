@@ -89,45 +89,8 @@ declare global {
 }
 
 
-// --- CONSTANTS ---
-const COLOR_PALETTE = [
-    'bg-gray-200', 'bg-red-200', 'bg-yellow-200', 'bg-green-200', 
-    'bg-blue-200', 'bg-indigo-200', 'bg-purple-200', 'bg-pink-200', 'bg-teal-200'
-];
-// --- INITIAL DATA (Example structure, now fetched from DB) ---
-const initialScheduleData: ScheduleData = {
-    "2025-07-28": [],
-    "2025-08-04": [],
-    "2025-08-11": [],
-    "2025-08-18": [],
-    "2025-08-25": []
-};
-
 // --- AI & LOGIC HELPERS ---
 const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
-
-const getColumnNameForDay = (day: string): string => {
-    // This function is now less relevant for main logic but can be kept for auxiliary purposes
-    // Or adapted to return a week identifier if needed
-    const dayDate = new Date(day);
-    const weekStart = startOfWeek(dayDate, { locale: fr });
-    return `Semaine du ${format(weekStart, 'd LLL', { locale: fr })}`;
-};
-
-const parseDayToDate = (dayString: string): Date => {
-    // This function will need to be re-evaluated.
-    // With task_date, we might not need to parse strings anymore.
-    return new Date(dayString);
-};
-
-const timeToSortValue = (time: string): number => {
-    switch (time) {
-        case 'Toute la journée': return 0;
-        case 'Matin': return 1;
-        case 'Après-midi': return 2;
-        default: return 3;
-    }
-};
 
 const sortCards = (cards: Card[]): Card[] => {
     return [...cards].sort((a, b) => {
@@ -325,32 +288,6 @@ const useSpeechRecognition = (onResult: (transcript: string) => void) => {
 
 // --- COMPONENTS ---
 
-const Calendar = ({ initialDate, onDateSelect, onClose }: { initialDate: Date, onDateSelect: (day: Date) => void, onClose: () => void }) => {
-    // ... (Component unchanged)
-    const [currentDate, setCurrentDate] = useState(new Date(initialDate));
-    const monthNames = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"];
-    const dayNames = ["Lu", "Ma", "Me", "Je", "Ve", "Sa", "Di"];
-    const changeMonth = (offset: number) => setCurrentDate(prev => { const d = new Date(prev); d.setMonth(d.getMonth() + offset); return d; });
-    const renderGrid = () => {
-        const year = currentDate.getFullYear(), month = currentDate.getMonth();
-        const firstDayOfMonth = new Date(year, month, 1).getDay(), daysInMonth = new Date(year, month + 1, 0).getDate();
-        const startOffset = (firstDayOfMonth === 0) ? 6 : firstDayOfMonth - 1;
-        const cells = [];
-        for (let i = 0; i < startOffset; i++) { cells.push(<div key={`e-${i}`}></div>); }
-        for (let day = 1; day <= daysInMonth; day++) {
-            cells.push(<div key={day} className="calendar-cell day" onClick={(e) => { e.stopPropagation(); onDateSelect(new Date(year, month, day)); onClose(); }}>{day}</div>);
-        }
-        return cells;
-    };
-    const calendarRef = useRef<HTMLDivElement>(null);
-    useEffect(() => {
-        const handleClickOutside = (event: MouseEvent) => { if (calendarRef.current && !calendarRef.current.contains(event.target as Node) && (event.target as HTMLElement).id !== 'modal-edit-day') { onClose(); } };
-        document.addEventListener('mousedown', handleClickOutside);
-        return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, [onClose]);
-    return (<div id="calendar-wrapper" ref={calendarRef}><div id="calendar-header"><button onClick={(e) => {e.stopPropagation(); changeMonth(-1)}} className="p-1 rounded-full hover:bg-gray-200">&lt;</button><span className="font-bold">{monthNames[currentDate.getMonth()]} {currentDate.getFullYear()}</span><button onClick={(e) => {e.stopPropagation(); changeMonth(1)}} className="p-1 rounded-full hover:bg-gray-200">&gt;</button></div><div id="calendar-grid">{dayNames.map(d => <div key={d} className="calendar-cell day-name">{d}</div>)}{renderGrid()}</div></div>);
-};
-
 const ConfirmationModal = ({ isOpen, onConfirm, onCancel }: { isOpen: boolean, onConfirm: (() => void) | null, onCancel: () => void }) => {
     if (!isOpen) return null;
     return (
@@ -375,7 +312,7 @@ const ConfirmationModal = ({ isOpen, onConfirm, onCancel }: { isOpen: boolean, o
 };
 
 
-const CardModal = ({ card, scheduleData, onClose, onSave, onSuggestSubtasks }: { card: Card | 'new' | Partial<Card>, scheduleData: ScheduleData, onClose: () => void, onSave: (formData: any, cardId?: string) => void, onSuggestSubtasks: (title: string) => Promise<string | null> }) => {
+const CardModal = ({ card, onClose, onSave, onSuggestSubtasks }: { card: Card | 'new' | Partial<Card>, onClose: () => void, onSave: (formData: any, cardId?: string) => void, onSuggestSubtasks: (title: string) => Promise<string | null> }) => {
     const isNew = card === 'new' || !(card as Card).id;
     const [formData, setFormData] = useState({
         title: isNew ? (card as Partial<Card>)?.title || '' : (card as Card).title,
@@ -674,18 +611,6 @@ const App = () => {
         draggedItem.current = null; 
     };
     const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => e.preventDefault();
-    const getDragAfterElement = (container: HTMLDivElement, y: number): Element | undefined => {
-        const draggableElements = [...container.querySelectorAll('.kanban-card:not(.dragging)')];
-        const initial: { offset: number, element?: Element } = { offset: Number.NEGATIVE_INFINITY };
-        return draggableElements.reduce((closest, child) => {
-            const box = child.getBoundingClientRect();
-            const offset = y - box.top - box.height / 2;
-            if (offset < 0 && offset > closest.offset) {
-                return { offset: offset, element: child };
-            }
-            return closest;
-        }, initial).element;
-    };
     const handleDrop = (e: React.DragEvent<HTMLDivElement>, targetColumnName: string) => {
         e.preventDefault();
         if (!draggedItem.current) return;
@@ -701,7 +626,7 @@ const App = () => {
         const performSave = () => {
             if (isNew) {
                 addCard(cardData);
-            } else if (cardId) {
+            } else if (typeof cardId === 'string') {
                 const location = findCardLocation(cardId);
                 if (location) {
                     const cardToUpdate: Card = {
@@ -833,12 +758,11 @@ const App = () => {
             
             <AIModal isOpen={isAIModalOpen} onClose={() => setIsAIModalOpen(false)} onGenerate={handleAIGenerate} />
 
-            {editingCard && <CardModal card={editingCard} scheduleData={scheduleData} onClose={() => setEditingCard(null)} onSave={handleSaveCard} onSuggestSubtasks={handleSuggestSubtasks} />}
+            {editingCard && <CardModal card={editingCard} onClose={() => setEditingCard(null)} onSave={handleSaveCard} onSuggestSubtasks={handleSuggestSubtasks} />}
             <ConfirmationModal isOpen={conflict.isOpen} onConfirm={conflict.onConfirm} onCancel={() => setConflict({ isOpen: false, onConfirm: null })} />
         </div>
     );
 };
 
 const root = ReactDOM.createRoot(document.getElementById('root') as HTMLElement);
-root.render(<StrictMode><App /></StrictMode>);
 root.render(<StrictMode><App /></StrictMode>);
