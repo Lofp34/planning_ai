@@ -232,6 +232,7 @@ const useKanbanState = () => {
 const useSpeechRecognition = (onResult: (transcript: string) => void) => {
     const [isListening, setIsListening] = useState(false);
     const recognitionRef = useRef<SpeechRecognition | null>(null);
+    const finalTranscriptRef = useRef('');
 
     useEffect(() => {
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -245,17 +246,22 @@ const useSpeechRecognition = (onResult: (transcript: string) => void) => {
         recognition.lang = 'fr-FR';
 
         recognition.onresult = (event) => {
-            let finalTranscript = '';
+            let interimTranscript = '';
             for (let i = event.resultIndex; i < event.results.length; ++i) {
+                const transcriptPart = event.results[i][0].transcript;
                 if (event.results[i].isFinal) {
-                    finalTranscript += event.results[i][0].transcript;
+                    finalTranscriptRef.current += transcriptPart;
+                } else {
+                    interimTranscript += transcriptPart;
                 }
             }
-            if (finalTranscript) {
-                onResult(finalTranscript);
-            }
+            onResult(finalTranscriptRef.current + interimTranscript);
         };
-        recognition.onstart = () => setIsListening(true);
+        
+        recognition.onstart = () => {
+            finalTranscriptRef.current = '';
+            setIsListening(true);
+        };
         recognition.onend = () => setIsListening(false);
         recognition.onerror = (event) => console.error('Speech recognition error:', event.error);
 
@@ -422,8 +428,8 @@ const AIModal = ({ isOpen, onClose, onGenerate }) => {
     const [prompt, setPrompt] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     
-    const handleResult = useCallback((transcript) => {
-        setPrompt(prev => prev ? `${prev} ${transcript}` : transcript);
+    const handleResult = useCallback((transcript: string) => {
+        setPrompt(transcript);
     }, []);
 
     const { isListening, toggleListening, isSupported } = useSpeechRecognition(handleResult);
