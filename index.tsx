@@ -620,42 +620,43 @@ const App = () => {
 
     const handleSaveCard = (formData: Omit<Card, 'id' | 'user_id' | 'created_at'>, cardId?: string) => {
         const isNew = !cardId;
-        
-        const cardData = { ...formData };
 
-        const performSave = () => {
-            if (isNew) {
-                addCard(cardData);
+        const saveData = () => {
+            setEditingCard(null);
+            setConflict({ isOpen: false, onConfirm: null });
+        };
+
+        if (isNew) {
+            const newCardData = { ...formData };
+            let hasConflict = false;
+            const targetDayTasks = scheduleData[format(new Date(formData.datetime_start), 'yyyy-MM-dd')] || [];
+            for (const card of targetDayTasks) {
+                if (card.datetime_start === formData.datetime_start) {
+                    hasConflict = true;
+                    break;
+                }
+            }
+
+            if (hasConflict) {
+                setConflict({ isOpen: true, onConfirm: () => { addCard(newCardData); saveData(); } });
             } else {
-                // @ts-ignore
+                addCard(newCardData);
+                saveData();
+            }
+        } else {
+            // This is the crucial type check for Vercel's strict compiler
+            if (typeof cardId === 'string') {
                 const location = findCardLocation(cardId);
                 if (location) {
                     const cardToUpdate: Card = {
                         ...location.card,
                         ...formData,
-                        // @ts-ignore
                         id: cardId,
                     };
                     updateCard(cardToUpdate);
+                    saveData();
                 }
             }
-            setEditingCard(null);
-            setConflict({ isOpen: false, onConfirm: null });
-        };
-
-        if (isNew) { 
-            let hasConflict = false;
-            // Simplified conflict check - check if any card exists at the same date and time
-            const targetDayTasks = scheduleData[format(new Date(formData.datetime_start), 'yyyy-MM-dd')] || [];
-            for (const card of targetDayTasks) {
-                if (card.datetime_start === formData.datetime_start) { // Changed to datetime_start
-                    hasConflict = true; break;
-                }
-            }
-            if (hasConflict) setConflict({ isOpen: true, onConfirm: () => performSave() });
-            else performSave();
-        } else {
-            performSave();
         }
     };
 
