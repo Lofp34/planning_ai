@@ -173,7 +173,8 @@ const useKanbanState = (session: Session | null, currentDate: Date) => {
     }, [fetchTasks]);
 
 
-    const findCardLocation = (cardId: string) => {
+    const findCardLocation = (cardId: string | undefined) => {
+        if (!cardId) return null;
         for (const day in scheduleData) {
             const cardIndex = scheduleData[day].findIndex(c => c.id === cardId);
             if (cardIndex > -1) return { columnName: day, cardIndex, card: scheduleData[day][cardIndex] };
@@ -621,13 +622,7 @@ const App = () => {
     const handleSaveCard = (formData: Omit<Card, 'id' | 'user_id' | 'created_at'>, cardId?: string) => {
         const isNew = !cardId;
 
-        const saveData = () => {
-            setEditingCard(null);
-            setConflict({ isOpen: false, onConfirm: null });
-        };
-
         if (isNew) {
-            const newCardData = { ...formData };
             let hasConflict = false;
             const targetDayTasks = scheduleData[format(new Date(formData.datetime_start), 'yyyy-MM-dd')] || [];
             for (const card of targetDayTasks) {
@@ -636,15 +631,20 @@ const App = () => {
                     break;
                 }
             }
-
             if (hasConflict) {
-                setConflict({ isOpen: true, onConfirm: () => { addCard(newCardData); saveData(); } });
+                setConflict({ 
+                    isOpen: true, 
+                    onConfirm: () => { 
+                        addCard(formData); 
+                        setEditingCard(null); 
+                        setConflict({ isOpen: false, onConfirm: null });
+                    } 
+                });
             } else {
-                addCard(newCardData);
-                saveData();
+                addCard(formData);
+                setEditingCard(null);
             }
         } else {
-            // This is the crucial type check for Vercel's strict compiler
             if (typeof cardId === 'string') {
                 const location = findCardLocation(cardId);
                 if (location) {
@@ -654,9 +654,9 @@ const App = () => {
                         id: cardId,
                     };
                     updateCard(cardToUpdate);
-                    saveData();
                 }
             }
+            setEditingCard(null);
         }
     };
 
