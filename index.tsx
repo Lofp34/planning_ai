@@ -5,21 +5,26 @@ import { supabase } from './supabaseClient';
 import { Auth } from '@supabase/auth-ui-react';
 import { ThemeSupa } from '@supabase/auth-ui-shared';
 import { Session } from '@supabase/supabase-js';
-import { startOfWeek, endOfWeek, addDays, format, eachDayOfInterval } from 'date-fns';
+import { startOfWeek, endOfWeek, addDays, format, eachDayOfInterval, parseISO } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import './index.css';
 
 // --- TYPES ---
+type TaskCategory = 'Perso' | 'Travail' | 'Santé' | 'Étude' | 'Admin';
+type TaskPriority = 'haute' | 'moyenne' | 'basse';
+
 interface Card {
     id: string;
     user_id: string;
     created_at: string;
-    task_date: string; // Changed from 'day' to 'task_date'
     title: string;
-    time: string;
-    details: string;
-    color: string;
-    progress: number;
+    subtasks: string[];
+    datetime_start: string;
+    datetime_end: string;
+    duration_min: number;
+    category: TaskCategory;
+    priority: TaskPriority;
+    notes?: string;
 }
 
 interface ScheduleData {
@@ -126,13 +131,8 @@ const timeToSortValue = (time: string): number => {
 
 const sortCards = (cards: Card[]): Card[] => {
     return [...cards].sort((a, b) => {
-        const dateA = new Date(a.task_date);
-        const dateB = new Date(b.task_date);
-        const dateDiff = dateA.getTime() - dateB.getTime();
-        if (dateDiff !== 0) return dateDiff;
-        
-        const timeA = timeToSortValue(a.time);
-        const timeB = timeToSortValue(b.time);
+        const timeA = new Date(a.datetime_start).getTime();
+        const timeB = new Date(b.datetime_start).getTime();
         return timeA - timeB;
     });
 };
@@ -141,10 +141,15 @@ const cardSchema = {
     type: Type.OBJECT,
     properties: {
         title: { type: Type.STRING, description: "Titre concis de la tâche." },
-        task_date: { type: Type.STRING, description: "La date de la tâche au format AAAA-MM-JJ. Aujourd'hui est " + format(new Date(), 'yyyy-MM-dd') },
-        time: { type: Type.STRING, description: "Le moment de la journée. Doit être 'Matin', 'Après-midi', ou 'Toute la journée'." },
-        details: { type: Type.STRING, description: "Description de la tâche, incluant les sous-tâches si mentionnées." },
-    }
+        subtasks: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Liste des sous-tâches ou étapes." },
+        datetime_start: { type: Type.STRING, description: `Date et heure de début au format 'YYYY-MM-DD HH:MM'. Aujourd'hui est ${format(new Date(), 'yyyy-MM-dd')}.` },
+        datetime_end: { type: Type.STRING, description: `Date et heure de fin au format 'YYYY-MM-DD HH:MM'.` },
+        duration_min: { type: Type.INTEGER, description: "Durée totale de la tâche en minutes." },
+        category: { type: Type.STRING, description: "Catégorie parmi 'Perso', 'Travail', 'Santé', 'Étude', 'Admin'." },
+        priority: { type: Type.STRING, description: "Priorité parmi 'haute', 'moyenne', 'basse'." },
+        notes: { type: Type.STRING, description: "Notes ou commentaires supplémentaires (optionnel)." }
+    },
+     required: ["title", "subtasks", "datetime_start", "datetime_end", "duration_min", "category", "priority"]
 };
 
 const subtasksSchema = {
@@ -170,8 +175,8 @@ const useKanbanState = (session: Session | null, currentDate: Date) => {
             .from('tasks')
             .select('*')
             .eq('user_id', session.user.id)
-            .gte('task_date', format(start, 'yyyy-MM-dd'))
-            .lte('task_date', format(end, 'yyyy-MM-dd'));
+            .gte('datetime_start', start.toISOString())
+            .lte('datetime_start', end.toISOString());
 
         if (error) {
             console.error('Error fetching tasks:', error);
@@ -185,7 +190,8 @@ const useKanbanState = (session: Session | null, currentDate: Date) => {
             
             // Populate columns with tasks
             tasks.forEach(task => {
-                const taskDateStr = format(new Date(task.task_date), 'yyyy-MM-dd');
+                const taskDate = parseISO(task.datetime_start);
+                const taskDateStr = format(taskDate, 'yyyy-MM-dd');
                 if (newScheduleData[taskDateStr]) {
                     newScheduleData[taskDateStr].push({ ...task, id: task.id.toString() });
                 }
@@ -230,7 +236,6 @@ const useKanbanState = (session: Session | null, currentDate: Date) => {
     const updateCard = async (updatedCard: Card) => {
         if (!session?.user) return;
         
-        // Remove helper fields before update
         const { id, user_id, created_at, ...updateData } = updatedCard;
 
         const { error } = await supabase
@@ -246,9 +251,21 @@ const useKanbanState = (session: Session | null, currentDate: Date) => {
     };
     
     const moveCard = async (cardId: string, targetDay: string) => {
+        const location = findCardLocation(cardId);
+        if (!location) return;
+
+        const originalCard = location.card;
+        const originalStartDate = new Date(originalCard.datetime_start);
+        
+        const targetDate = new Date(targetDay);
+        targetDate.setHours(originalStartDate.getHours(), originalStartDate.getMinutes());
+        
+        const newStartDate = targetDate.toISOString();
+        const newEndDate = new Date(targetDate.getTime() + originalCard.duration_min * 60000).toISOString();
+
         const { error } = await supabase
             .from('tasks')
-            .update({ task_date: targetDay })
+            .update({ datetime_start: newStartDate, datetime_end: newEndDate })
             .eq('id', cardId);
 
         if (error) {
@@ -362,86 +379,153 @@ const CardModal = ({ card, scheduleData, onClose, onSave, onSuggestSubtasks }: {
     const isNew = card === 'new' || !(card as Card).id;
     const [formData, setFormData] = useState({
         title: isNew ? (card as Partial<Card>)?.title || '' : (card as Card).title,
-        task_date: isNew ? (card as Partial<Card>)?.task_date || format(new Date(), 'yyyy-MM-dd') : (card as Card).task_date,
-        time: isNew ? (card as Partial<Card>)?.time || 'Matin' : (card as Card).time,
-        details: isNew ? (card as Partial<Card>)?.details || '' : (card as Card).details,
-        color: isNew ? (card as Partial<Card>)?.color || 'bg-teal-200' : (card as Card).color,
-        progress: isNew ? (card as Partial<Card>)?.progress || 0 : (card as Card).progress,
+        datetime_start: isNew ? format(new Date(), "yyyy-MM-dd'T'HH:mm") : format(parseISO((card as Card).datetime_start), "yyyy-MM-dd'T'HH:mm"),
+        duration_min: isNew ? (card as Partial<Card>)?.duration_min || 60 : (card as Card).duration_min,
+        category: isNew ? (card as Partial<Card>)?.category || 'Travail' : (card as Card).category,
+        priority: isNew ? (card as Partial<Card>)?.priority || 'moyenne' : (card as Card).priority,
+        subtasks: isNew ? (card as Partial<Card>)?.subtasks || [] : (card as Card).subtasks,
+        notes: isNew ? (card as Partial<Card>)?.notes || '' : (card as Card).notes,
     });
-    const [showCalendar, setShowCalendar] = useState(false);
     const [isSuggesting, setIsSuggesting] = useState(false);
     
     useEffect(() => {
         if (!isNew) {
             setFormData({
-                title: (card as Card).title, task_date: (card as Card).task_date, time: (card as Card).time,
-                details: (card as Card).details, color: (card as Card).color, progress: (card as Card).progress
+                title: (card as Card).title,
+                datetime_start: format(parseISO((card as Card).datetime_start), "yyyy-MM-dd'T'HH:mm"),
+                duration_min: (card as Card).duration_min,
+                category: (card as Card).category,
+                priority: (card as Card).priority,
+                subtasks: (card as Card).subtasks,
+                notes: (card as Card).notes || '',
             });
         }
     }, [card]);
 
-    const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }));
-    const handleDetailsChange = (e: React.FocusEvent<HTMLDivElement>) => setFormData(prev => ({...prev, details: e.currentTarget.textContent || ''}));
-    const handleDateSelect = (day: Date) => setFormData(prev => ({...prev, task_date: format(day, 'yyyy-MM-dd')}));
-    const handleColorChange = (color: string) => setFormData(prev => ({ ...prev, color }));
-    const handleProgressChange = (value: number) => setFormData(prev => ({ ...prev, progress: value }));
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
+        const { name, value } = e.target;
+        setFormData(prev => ({ ...prev, [name]: value }));
+    };
+
+    const handleSubtaskChange = (index: number, value: string) => {
+        const newSubtasks = [...formData.subtasks];
+        newSubtasks[index] = value;
+        setFormData(prev => ({ ...prev, subtasks: newSubtasks }));
+    };
+
+    const addSubtask = () => {
+        setFormData(prev => ({ ...prev, subtasks: [...prev.subtasks, ''] }));
+    };
+
+    const removeSubtask = (index: number) => {
+        const newSubtasks = formData.subtasks.filter((_, i) => i !== index);
+        setFormData(prev => ({ ...prev, subtasks: newSubtasks }));
+    };
 
     const handleSuggest = async () => {
         setIsSuggesting(true);
         const suggestion = await onSuggestSubtasks(formData.title);
         if (suggestion) {
-            setFormData(prev => ({...prev, details: suggestion}));
+            // Logic to parse suggestion and add as subtasks
         }
         setIsSuggesting(false);
     };
 
     const handleSave = () => {
         if (!formData.title) return alert("Le titre est obligatoire.");
-        if (!formData.task_date) return alert("Veuillez choisir une date.");
-        onSave(formData, (card as Card)?.id);
-    };
-    
-    const initialDate = () => {
-        return new Date(formData.task_date);
+        
+        const startDate = new Date(formData.datetime_start);
+        const endDate = new Date(startDate.getTime() + formData.duration_min * 60000);
+
+        const dataToSave = {
+            ...formData,
+            datetime_end: endDate.toISOString(),
+            subtasks: formData.subtasks.filter(st => st.trim() !== ''), // Clean empty subtasks
+        };
+
+        onSave(dataToSave, (card as Card)?.id);
     };
 
     return (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 modal-backdrop" onClick={onClose}>
-            <div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-6 relative" onClick={e => e.stopPropagation()}>
-                <button onClick={onClose} className="absolute top-4 right-4 text-gray-500 hover:text-gray-800">
-                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path>
-                    </svg>
+            <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl p-6 relative max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+                {/* Close Button */}
+                <button onClick={onClose} className="absolute top-4 right-4 text-gray-500 hover:text-gray-800 z-10">
+                    {/* SVG icon */}
                 </button>
-                <div className="mb-4">
-                     <input type="text" name="title" value={formData.title} onChange={handleChange} placeholder="Titre de la nouvelle carte" className="text-2xl font-bold w-full border-b-2 border-gray-300 focus:border-blue-500 outline-none pb-2" />
-                </div>
-                <div className="text-gray-700 space-y-4">
-                    <div className="relative">
-                        <strong className="font-semibold">Date :</strong>
-                        <button id="modal-edit-day" onClick={() => setShowCalendar(s => !s)} className="ml-2 p-2 border rounded-md hover:bg-gray-100">{format(new Date(formData.task_date), 'eeee d MMMM', { locale: fr })}</button>
-                        {showCalendar && <Calendar initialDate={initialDate()} onDateSelect={handleDateSelect} onClose={() => setShowCalendar(false)} />}
-                    </div>
-                     <div>
-                        <strong className="font-semibold">Moment :</strong>
-                        <select name="time" value={formData.time} onChange={handleChange} className="ml-2 p-2 border rounded-md"><option value="Matin">Matin</option><option value="Après-midi">Après-midi</option><option value="Toute la journée">Toute la journée</option></select>
-                    </div>
+                
+                {/* Title */}
+                <input type="text" name="title" value={formData.title} onChange={handleChange} placeholder="Titre de la tâche" className="text-2xl font-bold w-full border-b-2 border-gray-300 focus:border-blue-500 outline-none pb-2 mb-4" />
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {/* Left Column */}
                     <div>
-                        <div className="flex justify-between items-center mb-1">
-                            <strong className="font-semibold block">Détails :</strong>
-                            <button onClick={handleSuggest} disabled={isSuggesting} className="text-sm text-blue-600 hover:text-blue-800 flex items-center disabled:opacity-50">
-                                {isSuggesting ? 'Génération...' : '✨ Suggérer des sous-tâches'}
-                            </button>
+                        {/* Datetime Start */}
+                        <div className="mb-4">
+                            <label className="font-semibold text-gray-700 block mb-1">Début</label>
+                            <input type="datetime-local" name="datetime_start" value={formData.datetime_start} onChange={handleChange} className="w-full p-2 border rounded-md"/>
                         </div>
-                        <div onBlur={handleDetailsChange} contentEditable="true" suppressContentEditableWarning={true} className="w-full border border-gray-200 p-2 rounded-md min-h-[80px] focus:outline-none focus:ring-2 focus:ring-blue-500" dangerouslySetInnerHTML={{__html: formData.details}}></div>
+                        
+                        {/* Duration */}
+                        <div className="mb-4">
+                            <label className="font-semibold text-gray-700 block mb-1">Durée (minutes)</label>
+                            <input type="number" name="duration_min" value={formData.duration_min} onChange={handleChange} className="w-full p-2 border rounded-md"/>
+                        </div>
+
+                        {/* Category */}
+                        <div className="mb-4">
+                            <label className="font-semibold text-gray-700 block mb-1">Catégorie</label>
+                            <select name="category" value={formData.category} onChange={handleChange} className="w-full p-2 border rounded-md">
+                                <option value="Travail">Travail</option>
+                                <option value="Perso">Perso</option>
+                                <option value="Santé">Santé</option>
+                                <option value="Étude">Étude</option>
+                                <option value="Admin">Admin</option>
+                            </select>
+                        </div>
+
+                        {/* Priority */}
+                        <div>
+                            <label className="font-semibold text-gray-700 block mb-1">Priorité</label>
+                            <select name="priority" value={formData.priority} onChange={handleChange} className="w-full p-2 border rounded-md">
+                                <option value="haute">Haute</option>
+                                <option value="moyenne">Moyenne</option>
+                                <option value="basse">Basse</option>
+                            </select>
+                        </div>
                     </div>
+
+                    {/* Right Column */}
                     <div>
-                        <strong className="font-semibold block mb-2">Progression : {formData.progress}%</strong>
-                        <div className="flex items-center gap-3"><button onClick={() => handleProgressChange(Math.max(0, formData.progress - 10))} className="p-1 rounded-full bg-gray-200 hover:bg-gray-300">-</button><input type="range" min="0" max="100" step="10" value={formData.progress} onChange={(e) => handleProgressChange(parseInt(e.target.value))} className="w-full h-2 bg-gray-300 rounded-lg appearance-none cursor-pointer" /><button onClick={() => handleProgressChange(Math.min(100, formData.progress + 10))} className="p-1 rounded-full bg-gray-200 hover:bg-gray-300">+</button></div>
+                        {/* Subtasks */}
+                        <div className="mb-4">
+                             <div className="flex justify-between items-center mb-1">
+                                <strong className="font-semibold block">Sous-tâches :</strong>
+                                <button onClick={handleSuggest} disabled={isSuggesting} className="text-sm text-blue-600 hover:text-blue-800 flex items-center disabled:opacity-50">
+                                    {isSuggesting ? 'Génération...' : '✨ Suggérer'}
+                                </button>
+                            </div>
+                            {formData.subtasks.map((subtask, index) => (
+                                <div key={index} className="flex items-center gap-2 mb-2">
+                                    <input type="text" value={subtask} onChange={(e) => handleSubtaskChange(index, e.target.value)} className="w-full p-2 border rounded-md"/>
+                                    <button onClick={() => removeSubtask(index)} className="text-red-500 hover:text-red-700">X</button>
+                                </div>
+                            ))}
+                            <button onClick={addSubtask} className="text-sm text-blue-600 hover:text-blue-800 mt-1">+ Ajouter une sous-tâche</button>
+                        </div>
+                        
+                        {/* Notes */}
+                        <div>
+                            <label className="font-semibold text-gray-700 block mb-1">Notes</label>
+                            <textarea name="notes" value={formData.notes} onChange={handleChange} className="w-full p-2 border rounded-md min-h-[100px]"></textarea>
+                        </div>
                     </div>
-                     <div><strong className="font-semibold block mb-2">Couleur :</strong><div className="flex flex-wrap gap-2">{COLOR_PALETTE.map(color => (<button key={color} type="button" onClick={() => handleColorChange(color)} className={`w-8 h-8 rounded-full transition-transform transform hover:scale-110 ${color} ${formData.color === color ? 'ring-2 ring-offset-2 ring-blue-500' : ''}`} />))}</div></div>
                 </div>
-                <div className="mt-6 flex justify-end"><button onClick={handleSave} className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700">Enregistrer</button></div>
+
+                {/* Save Button */}
+                <div className="mt-6 flex justify-end">
+                    <button onClick={handleSave} className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700">Enregistrer</button>
+                </div>
             </div>
         </div>
     );
@@ -495,9 +579,33 @@ const AIModal = ({ isOpen, onClose, onGenerate }: { isOpen: boolean, onClose: ()
 }
 
 
-const KanbanCard = ({ card, onDragStart, onClick, onUpdateCard }: { card: Card, onDragStart: (e: React.DragEvent<HTMLDivElement>) => void, onClick: () => void, onUpdateCard: (card: Card) => void }) => {
-    const handleProgressClick = (e: React.MouseEvent<HTMLDivElement>) => { e.stopPropagation(); onUpdateCard({ ...card, progress: card.progress >= 100 ? 0 : card.progress + 10 }); };
-    return (<div id={card.id} className={`kanban-card p-4 rounded-lg shadow-md ${card.color}`} draggable="true" onDragStart={onDragStart} onClick={onClick}><p className="font-bold text-gray-900">{card.title}</p><p className="text-sm text-gray-700 mt-1">{format(new Date(card.task_date), 'd LLL', { locale: fr })} - {card.time}</p><div className="mt-3 pt-2 border-t border-gray-500 border-opacity-20 cursor-pointer" onClick={handleProgressClick}><div className="flex justify-between items-center text-xs text-gray-700"><span>Progression</span><span className="font-semibold">{card.progress}%</span></div><div className="w-full bg-gray-300 bg-opacity-50 rounded-full h-1.5 mt-1"><div className={`h-1.5 rounded-full ${card.color.replace('200', '500')}`} style={{ width: `${card.progress}%` }}></div></div></div></div>);
+const KanbanCard = ({ card, onDragStart, onClick }: { card: Card, onDragStart: (e: React.DragEvent<HTMLDivElement>) => void, onClick: () => void }) => {
+    const priorityColors = {
+        haute: 'border-red-500',
+        moyenne: 'border-yellow-500',
+        basse: 'border-green-500',
+    };
+    
+    const categoryIcons = {
+        'Travail': '💼', 'Perso': '🏠', 'Santé': '❤️', 'Étude': '🎓', 'Admin': '📄'
+    };
+
+    return (
+        <div id={card.id} className={`kanban-card p-4 rounded-lg shadow-md bg-white border-l-4 ${priorityColors[card.priority]}`} draggable="true" onDragStart={onDragStart} onClick={onClick}>
+            <div className="flex justify-between items-start">
+                <p className="font-bold text-gray-900 pr-2">{card.title}</p>
+                <span className="text-2xl">{categoryIcons[card.category]}</span>
+            </div>
+            <p className="text-sm text-gray-600 mt-2">
+                {format(parseISO(card.datetime_start), 'HH:mm')} - {format(parseISO(card.datetime_end), 'HH:mm')}
+            </p>
+            {card.subtasks && card.subtasks.length > 0 && (
+                 <div className="mt-3 pt-2 border-t border-gray-200">
+                     <p className="text-xs text-gray-500">{card.subtasks.length} sous-tâche(s)</p>
+                 </div>
+            )}
+        </div>
+    );
 };
 
 const KanbanColumn = ({ columnName, onDragOver, onDrop, children }: { columnName: string, onDragOver: (e: React.DragEvent<HTMLDivElement>) => void, onDrop: (e: React.DragEvent<HTMLDivElement>) => void, children: React.ReactNode }) => {
@@ -611,9 +719,9 @@ const App = () => {
         if (isNew) { 
             let hasConflict = false;
             // Simplified conflict check - check if any card exists at the same date and time
-            const targetDayTasks = scheduleData[format(new Date(formData.task_date), 'yyyy-MM-dd')] || [];
+            const targetDayTasks = scheduleData[format(new Date(formData.datetime_start), 'yyyy-MM-dd')] || [];
             for (const card of targetDayTasks) {
-                if (card.time === 'Toute la journée' || formData.time === 'Toute la journée' || card.time === formData.time) {
+                if (card.datetime_start === formData.datetime_start) { // Changed to datetime_start
                     hasConflict = true; break;
                 }
             }
@@ -628,12 +736,12 @@ const App = () => {
         try {
             const result = await ai.models.generateContent({
                 model: 'gemini-2.5-flash',
-                contents: `A partir de la requête utilisateur, extrais les informations pour créer une tâche. Nous sommes en 2025. Réponds uniquement avec le JSON. Requête: "${prompt}"`,
+                contents: `En tant qu'assistant de projet proactif, analyse la requête suivante et génère une tâche complète. Sois créatif : suggère des sous-tâches pertinentes et ajoute des notes utiles si nécessaire. Nous sommes en 2025. Requête: "${prompt}"`,
                 config: { responseMimeType: "application/json", responseSchema: cardSchema }
             });
             const cardData = JSON.parse(result.text);
-            if(cardData.title && cardData.task_date && cardData.time) {
-                setEditingCard({ ...cardData, color: 'bg-teal-200', progress: 0 });
+            if(cardData.title && cardData.datetime_start && cardData.datetime_end && cardData.duration_min && cardData.category && cardData.priority) {
+                setEditingCard({ ...cardData, subtasks: [], notes: '' }); // Initialize subtasks and notes
             } else {
                  alert("L'IA n'a pas pu générer une tâche complète. Veuillez réessayer.");
             }
@@ -703,7 +811,7 @@ const App = () => {
                     const cards = scheduleData[dayStr] || [];
                     return (
                         <KanbanColumn key={dayStr} columnName={dayStr} onDragOver={handleDragOver} onDrop={(e) => handleDrop(e, dayStr)}>
-                           {cards.map(card => (<KanbanCard key={card.id} card={card} onDragStart={(e) => handleDragStart(e, card.id)} onClick={() => setEditingCard(card)} onUpdateCard={updateCard} />))}
+                           {cards.map(card => (<KanbanCard key={card.id} card={card} onDragStart={(e) => handleDragStart(e, card.id)} onClick={() => setEditingCard(card)} />))}
                         </KanbanColumn>
                     )
                 })}
