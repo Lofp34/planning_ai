@@ -619,47 +619,49 @@ const App = () => {
         moveCard(cardId, targetColumnName);
     };
 
-    const handleSaveCard = (formData: Omit<Card, 'id' | 'user_id' | 'created_at'>, cardId?: string) => {
-        const isNew = !cardId;
-
-        if (isNew) {
+    const handleSaveCard = (
+        formData: Omit<Card, 'id' | 'user_id' | 'created_at'>,
+        cardId?: string
+    ) => {
+        /* ---------- CAS CRÉATION ---------- */
+        if (!cardId) {
             let hasConflict = false;
-            const targetDayTasks = scheduleData[format(new Date(formData.datetime_start), 'yyyy-MM-dd')] || [];
+            const targetDay = format(new Date(formData.datetime_start), 'yyyy-MM-dd');
+            const targetDayTasks = scheduleData[targetDay] || [];
             for (const card of targetDayTasks) {
                 if (card.datetime_start === formData.datetime_start) {
                     hasConflict = true;
                     break;
                 }
             }
-            if (hasConflict) {
-                setConflict({ 
-                    isOpen: true, 
-                    onConfirm: () => { 
-                        addCard(formData); 
-                        setEditingCard(null); 
-                        setConflict({ isOpen: false, onConfirm: null });
-                    } 
-                });
-            } else {
+
+            const doAdd = () => {
                 addCard(formData);
                 setEditingCard(null);
-            }
-        } else {
-            if (typeof cardId === 'string') {
-                const location = findCardLocation(cardId);
-                if (location) {
-                    const cardToUpdate: Card = {
-                        ...location.card,
-                        ...formData,
-                        id: cardId,
-                    };
-                    updateCard(cardToUpdate);
-                }
-            }
-            setEditingCard(null);
-        }
-    };
+                setConflict({ isOpen: false, onConfirm: null });
+            };
 
+            if (hasConflict) {
+                setConflict({ isOpen: true, onConfirm: doAdd });
+            } else {
+                doAdd();
+            }
+            return; // on sort : plus bas c'est le cas mise à jour
+        }
+
+        /* ---------- CAS MISE À JOUR ---------- */
+        const location = findCardLocation(cardId as string);
+        if (!location) return;
+
+        const cardToUpdate: Card = {
+            ...location.card,
+            ...formData,
+            id: cardId as string,
+        };
+        updateCard(cardToUpdate);
+        setEditingCard(null);
+    };
+    
     const handleAIGenerate = async (prompt: string) => {
         try {
             const result = await ai.models.generateContent({
