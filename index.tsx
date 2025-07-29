@@ -1,12 +1,20 @@
 import React, { useState, useEffect, useCallback, useRef, StrictMode } from 'react';
 import ReactDOM from 'react-dom/client';
 import { GoogleGenAI, Type } from "@google/genai";
+import { supabase } from './supabaseClient';
+import { Auth } from '@supabase/auth-ui-react';
+import { ThemeSupa } from '@supabase/auth-ui-shared';
+import { Session } from '@supabase/supabase-js';
+import { startOfWeek, endOfWeek, addDays, format, eachDayOfInterval } from 'date-fns';
+import { fr } from 'date-fns/locale';
 import './index.css';
 
 // --- TYPES ---
 interface Card {
     id: string;
-    day: string;
+    user_id: string;
+    created_at: string;
+    task_date: string; // Changed from 'day' to 'task_date'
     title: string;
     time: string;
     details: string;
@@ -15,7 +23,7 @@ interface Card {
 }
 
 interface ScheduleData {
-    [columnName: string]: Card[];
+    [day: string]: Card[];
 }
 
 // --- Web Speech API Types ---
@@ -81,45 +89,30 @@ const COLOR_PALETTE = [
     'bg-gray-200', 'bg-red-200', 'bg-yellow-200', 'bg-green-200', 
     'bg-blue-200', 'bg-indigo-200', 'bg-purple-200', 'bg-pink-200', 'bg-teal-200'
 ];
-// --- INITIAL DATA ---
+// --- INITIAL DATA (Example structure, now fetched from DB) ---
 const initialScheduleData: ScheduleData = {
-    "Semaine 0 (28 Juil - 1 Août): Anticipation": [
-        { id: "s0-t1", day: "Lundi 28", title: "Préparer la Semaine 1", time: "Matin", details: "Vérifier les objectifs du bootcamp, lister les pré-requis.", color: "bg-gray-200", progress: 0 },
-    ],
-    "Semaine 1 (4-8 Août): Socle Commercial": [
-        { id: "s1-t1", day: "Lundi 4", title: "Stratégie Bootcamp", time: "Matin", details: "Gantt, Chiffrage, Cible, Stratégie de vente", color: "bg-blue-200", progress: 0 },
-    ],
-    "Semaine 2 (11-15 Août): Montée en Compétence IA": [
-        { id: "s2-t1", day: "Lundi 11", title: "Formation RAG", time: "Matin", details: "Concepts, Architecture, POC sur mes docs", color: "bg-red-200", progress: 0 },
-    ],
-    "Semaine 3 (18-22 Août): Développement Projets Clients": [
-        { id: "s3-t1", day: "Lundi 18", title: "Projet Sébastien V1", time: "Matin", details: "Deviseur 3D", color: "bg-cyan-200", progress: 0 },
-    ],
-    "Semaine 4 (25-29 Août): Production & Bilan": [
-        { id: "s4-t1", day: "Lundi 25", title: "Production Contenu", time: "Matin", details: "Rédaction, Enregistrement", color: "bg-pink-200", progress: 0 },
-    ]
+    "2025-07-28": [],
+    "2025-08-04": [],
+    "2025-08-11": [],
+    "2025-08-18": [],
+    "2025-08-25": []
 };
 
 // --- AI & LOGIC HELPERS ---
 const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
 
 const getColumnNameForDay = (day: string): string => {
-    const dayNumber = parseInt(day.split(' ')[1]);
-    if (isNaN(dayNumber)) return Object.keys(initialScheduleData)[0]; // Fallback
-
-    if (dayNumber >= 28 || dayNumber === 1) return "Semaine 0 (28 Juil - 1 Août): Anticipation";
-    if (dayNumber >= 4 && dayNumber <= 8) return "Semaine 1 (4-8 Août): Socle Commercial";
-    if (dayNumber >= 11 && dayNumber <= 15) return "Semaine 2 (11-15 Août): Montée en Compétence IA";
-    if (dayNumber >= 18 && dayNumber <= 22) return "Semaine 3 (18-22 Août): Développement Projets Clients";
-    if (dayNumber >= 25 && dayNumber <= 29) return "Semaine 4 (25-29 Août): Production & Bilan";
-    
-    return Object.keys(initialScheduleData)[0]; // Default fallback
+    // This function is now less relevant for main logic but can be kept for auxiliary purposes
+    // Or adapted to return a week identifier if needed
+    const dayDate = new Date(day);
+    const weekStart = startOfWeek(dayDate, { locale: fr });
+    return `Semaine du ${format(weekStart, 'd LLL', { locale: fr })}`;
 };
 
 const parseDayToDate = (dayString: string): Date => {
-    const dayNumber = parseInt(dayString.split(' ')[1]);
-    const month = dayNumber >= 28 ? 6 : 7; 
-    return new Date(2025, month, dayNumber);
+    // This function will need to be re-evaluated.
+    // With task_date, we might not need to parse strings anymore.
+    return new Date(dayString);
 };
 
 const timeToSortValue = (time: string): number => {
@@ -133,8 +126,8 @@ const timeToSortValue = (time: string): number => {
 
 const sortCards = (cards: Card[]): Card[] => {
     return [...cards].sort((a, b) => {
-        const dateA = parseDayToDate(a.day);
-        const dateB = parseDayToDate(b.day);
+        const dateA = new Date(a.task_date);
+        const dateB = new Date(b.task_date);
         const dateDiff = dateA.getTime() - dateB.getTime();
         if (dateDiff !== 0) return dateDiff;
         
@@ -148,7 +141,7 @@ const cardSchema = {
     type: Type.OBJECT,
     properties: {
         title: { type: Type.STRING, description: "Titre concis de la tâche." },
-        day: { type: Type.STRING, description: "Le jour et le numéro du mois, ex: 'Lundi 4', 'Mardi 29'. Le mois est Août 2025 (sauf pour fin Juillet)." },
+        task_date: { type: Type.STRING, description: "La date de la tâche au format AAAA-MM-JJ. Aujourd'hui est " + format(new Date(), 'yyyy-MM-dd') },
         time: { type: Type.STRING, description: "Le moment de la journée. Doit être 'Matin', 'Après-midi', ou 'Toute la journée'." },
         details: { type: Type.STRING, description: "Description de la tâche, incluant les sous-tâches si mentionnées." },
     }
@@ -162,71 +155,109 @@ const subtasksSchema = {
 };
 
 // --- HOOKS ---
-const useKanbanState = () => {
-    const [scheduleData, setScheduleData] = useState<ScheduleData>(() => {
-        try {
-            const savedData = localStorage.getItem('kanbanPlanningData');
-            return savedData ? JSON.parse(savedData) : JSON.parse(JSON.stringify(initialScheduleData));
-        } catch (e) {
-            return JSON.parse(JSON.stringify(initialScheduleData));
+const useKanbanState = (session: Session | null, currentDate: Date) => {
+    const [scheduleData, setScheduleData] = useState<ScheduleData>({});
+    const [weekDays, setWeekDays] = useState<Date[]>([]);
+
+    const fetchTasks = useCallback(async () => {
+        if (!session?.user) return;
+
+        const start = startOfWeek(currentDate, { locale: fr });
+        const end = endOfWeek(currentDate, { locale: fr });
+        setWeekDays(eachDayOfInterval({ start, end }));
+
+        const { data: tasks, error } = await supabase
+            .from('tasks')
+            .select('*')
+            .eq('user_id', session.user.id)
+            .gte('task_date', format(start, 'yyyy-MM-dd'))
+            .lte('task_date', format(end, 'yyyy-MM-dd'));
+
+        if (error) {
+            console.error('Error fetching tasks:', error);
+            setScheduleData({});
+        } else {
+            const newScheduleData: ScheduleData = {};
+            // Initialize columns for each day of the week
+            eachDayOfInterval({ start, end }).forEach(day => {
+                newScheduleData[format(day, 'yyyy-MM-dd')] = [];
+            });
+            
+            // Populate columns with tasks
+            tasks.forEach(task => {
+                const taskDateStr = format(new Date(task.task_date), 'yyyy-MM-dd');
+                if (newScheduleData[taskDateStr]) {
+                    newScheduleData[taskDateStr].push({ ...task, id: task.id.toString() });
+                }
+            });
+
+            // Sort tasks within each day's column
+            for (const day in newScheduleData) {
+                newScheduleData[day] = sortCards(newScheduleData[day]);
+            }
+            setScheduleData(newScheduleData);
         }
-    });
+    }, [session, currentDate]);
 
     useEffect(() => {
-        localStorage.setItem('kanbanPlanningData', JSON.stringify(scheduleData));
-    }, [scheduleData]);
+        fetchTasks();
+    }, [fetchTasks]);
+
 
     const findCardLocation = (cardId: string) => {
-        for (const columnName in scheduleData) {
-            const cardIndex = scheduleData[columnName].findIndex(c => c.id === cardId);
-            if (cardIndex > -1) return { columnName, cardIndex, card: scheduleData[columnName][cardIndex] };
+        for (const day in scheduleData) {
+            const cardIndex = scheduleData[day].findIndex(c => c.id === cardId);
+            if (cardIndex > -1) return { columnName: day, cardIndex, card: scheduleData[day][cardIndex] };
         }
         return null;
     };
 
-    const addCard = (card: Card) => {
-        setScheduleData(prevData => {
-            const newData = { ...prevData };
-            const targetColumnName = getColumnNameForDay(card.day);
-            const columnCards = [...(newData[targetColumnName] || []), card];
-            newData[targetColumnName] = sortCards(columnCards);
-            return newData;
-        });
+    const addCard = async (card: Omit<Card, 'id' | 'user_id' | 'created_at'>) => {
+        if (!session?.user) return;
+        
+        const { data, error } = await supabase
+            .from('tasks')
+            .insert([{ ...card, user_id: session.user.id }])
+            .select();
+
+        if (error) {
+            console.error('Error adding card:', error);
+        } else if (data) {
+           fetchTasks();
+        }
     };
 
-    const updateCard = (updatedCard: Card) => {
-        setScheduleData(prevData => {
-            const newData = { ...prevData };
-            for (const colName in newData) {
-                const cardIndex = newData[colName].findIndex(c => c.id === updatedCard.id);
-                if (cardIndex !== -1) { newData[colName].splice(cardIndex, 1); break; }
-            }
-            const targetColumnName = getColumnNameForDay(updatedCard.day);
-            const columnCards = [...(newData[targetColumnName] || []), updatedCard];
-            newData[targetColumnName] = sortCards(columnCards);
-            return newData;
-        });
+    const updateCard = async (updatedCard: Card) => {
+        if (!session?.user) return;
+        
+        // Remove helper fields before update
+        const { id, user_id, created_at, ...updateData } = updatedCard;
+
+        const { error } = await supabase
+            .from('tasks')
+            .update(updateData)
+            .eq('id', updatedCard.id);
+
+        if (error) {
+            console.error('Error updating card:', error);
+        } else {
+            fetchTasks();
+        }
     };
     
-    const moveCard = (cardId: string, targetColumnName: string, targetIndex: number | null) => {
-        const sourceLocation = findCardLocation(cardId);
-        if (!sourceLocation) return;
-        const { card, columnName: sourceColumnName, cardIndex: sourceCardIndex } = sourceLocation;
-        setScheduleData(prevData => {
-            const newData = { ...prevData };
-            const sourceColumn = [...newData[sourceColumnName]];
-            sourceColumn.splice(sourceCardIndex, 1);
-            newData[sourceColumnName] = sourceColumn;
-            
-            const targetColumn = [...(newData[targetColumnName] || [])];
-            const finalIndex = targetIndex === null ? targetColumn.length : targetIndex;
-            targetColumn.splice(finalIndex, 0, card);
-            newData[targetColumnName] = targetColumn;
-            return newData;
-        });
+    const moveCard = async (cardId: string, targetDay: string) => {
+        const { error } = await supabase
+            .from('tasks')
+            .update({ task_date: targetDay })
+            .eq('id', cardId);
+
+        if (error) {
+            console.error('Error moving card:', error);
+        }
+        fetchTasks(); // Refetch to show the result
     };
 
-    return { scheduleData, addCard, updateCard, moveCard, findCardLocation };
+    return { scheduleData, weekDays, addCard, updateCard, moveCard, findCardLocation };
 };
 
 const useSpeechRecognition = (onResult: (transcript: string) => void) => {
@@ -277,12 +308,12 @@ const useSpeechRecognition = (onResult: (transcript: string) => void) => {
 
 // --- COMPONENTS ---
 
-const Calendar = ({ initialDate, onDateSelect, onClose }) => {
+const Calendar = ({ initialDate, onDateSelect, onClose }: { initialDate: Date, onDateSelect: (day: Date) => void, onClose: () => void }) => {
     // ... (Component unchanged)
     const [currentDate, setCurrentDate] = useState(new Date(initialDate));
     const monthNames = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"];
     const dayNames = ["Lu", "Ma", "Me", "Je", "Ve", "Sa", "Di"];
-    const changeMonth = (offset) => setCurrentDate(prev => { const d = new Date(prev); d.setMonth(d.getMonth() + offset); return d; });
+    const changeMonth = (offset: number) => setCurrentDate(prev => { const d = new Date(prev); d.setMonth(d.getMonth() + offset); return d; });
     const renderGrid = () => {
         const year = currentDate.getFullYear(), month = currentDate.getMonth();
         const firstDayOfMonth = new Date(year, month, 1).getDay(), daysInMonth = new Date(year, month + 1, 0).getDate();
@@ -290,20 +321,20 @@ const Calendar = ({ initialDate, onDateSelect, onClose }) => {
         const cells = [];
         for (let i = 0; i < startOffset; i++) { cells.push(<div key={`e-${i}`}></div>); }
         for (let day = 1; day <= daysInMonth; day++) {
-            cells.push(<div key={day} className="calendar-cell day" onClick={(e) => { e.stopPropagation(); const d = new Date(year, month, day); onDateSelect(`${dayNames[(d.getDay() === 0) ? 6 : d.getDay() - 1]} ${day}`); onClose(); }}>{day}</div>);
+            cells.push(<div key={day} className="calendar-cell day" onClick={(e) => { e.stopPropagation(); onDateSelect(new Date(year, month, day)); onClose(); }}>{day}</div>);
         }
         return cells;
     };
-    const calendarRef = useRef(null);
+    const calendarRef = useRef<HTMLDivElement>(null);
     useEffect(() => {
-        const handleClickOutside = (event) => { if (calendarRef.current && !calendarRef.current.contains(event.target) && event.target.id !== 'modal-edit-day') { onClose(); } };
+        const handleClickOutside = (event: MouseEvent) => { if (calendarRef.current && !calendarRef.current.contains(event.target as Node) && (event.target as HTMLElement).id !== 'modal-edit-day') { onClose(); } };
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, [onClose]);
     return (<div id="calendar-wrapper" ref={calendarRef}><div id="calendar-header"><button onClick={(e) => {e.stopPropagation(); changeMonth(-1)}} className="p-1 rounded-full hover:bg-gray-200">&lt;</button><span className="font-bold">{monthNames[currentDate.getMonth()]} {currentDate.getFullYear()}</span><button onClick={(e) => {e.stopPropagation(); changeMonth(1)}} className="p-1 rounded-full hover:bg-gray-200">&gt;</button></div><div id="calendar-grid">{dayNames.map(d => <div key={d} className="calendar-cell day-name">{d}</div>)}{renderGrid()}</div></div>);
 };
 
-const ConfirmationModal = ({ isOpen, onConfirm, onCancel }) => {
+const ConfirmationModal = ({ isOpen, onConfirm, onCancel }: { isOpen: boolean, onConfirm: (() => void) | null, onCancel: () => void }) => {
     if (!isOpen) return null;
     return (
         <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4 confirmation-modal">
@@ -318,7 +349,7 @@ const ConfirmationModal = ({ isOpen, onConfirm, onCancel }) => {
                     <p className="text-sm text-gray-500">Une activité est déjà présente sur ce créneau. Voulez-vous continuer quand même ?</p>
                 </div>
                 <div className="mt-4 flex justify-center space-x-4">
-                    <button onClick={onConfirm} className="px-4 py-2 bg-yellow-500 text-white text-base font-medium rounded-md w-auto hover:bg-yellow-600">Valider quand même</button>
+                    <button onClick={onConfirm || undefined} className="px-4 py-2 bg-yellow-500 text-white text-base font-medium rounded-md w-auto hover:bg-yellow-600">Valider quand même</button>
                     <button onClick={onCancel} className="px-4 py-2 bg-gray-200 text-gray-800 text-base font-medium rounded-md w-auto hover:bg-gray-300">Choisir une autre date</button>
                 </div>
             </div>
@@ -327,15 +358,15 @@ const ConfirmationModal = ({ isOpen, onConfirm, onCancel }) => {
 };
 
 
-const CardModal = ({ card, scheduleData, onClose, onSave, onSuggestSubtasks }) => {
-    const isNew = card === 'new' || !card.id;
+const CardModal = ({ card, scheduleData, onClose, onSave, onSuggestSubtasks }: { card: Card | 'new' | Partial<Card>, scheduleData: ScheduleData, onClose: () => void, onSave: (formData: any, cardId?: string) => void, onSuggestSubtasks: (title: string) => Promise<string | null> }) => {
+    const isNew = card === 'new' || !(card as Card).id;
     const [formData, setFormData] = useState({
-        title: isNew ? card?.title || '' : card.title,
-        day: isNew ? card?.day || 'Choisir une date' : card.day,
-        time: isNew ? card?.time || 'Matin' : card.time,
-        details: isNew ? card?.details || '' : card.details,
-        color: isNew ? card?.color || 'bg-teal-200' : card.color,
-        progress: isNew ? card?.progress || 0 : card.progress,
+        title: isNew ? (card as Partial<Card>)?.title || '' : (card as Card).title,
+        task_date: isNew ? (card as Partial<Card>)?.task_date || format(new Date(), 'yyyy-MM-dd') : (card as Card).task_date,
+        time: isNew ? (card as Partial<Card>)?.time || 'Matin' : (card as Card).time,
+        details: isNew ? (card as Partial<Card>)?.details || '' : (card as Card).details,
+        color: isNew ? (card as Partial<Card>)?.color || 'bg-teal-200' : (card as Card).color,
+        progress: isNew ? (card as Partial<Card>)?.progress || 0 : (card as Card).progress,
     });
     const [showCalendar, setShowCalendar] = useState(false);
     const [isSuggesting, setIsSuggesting] = useState(false);
@@ -343,15 +374,15 @@ const CardModal = ({ card, scheduleData, onClose, onSave, onSuggestSubtasks }) =
     useEffect(() => {
         if (!isNew) {
             setFormData({
-                title: card.title, day: card.day, time: card.time,
-                details: card.details, color: card.color, progress: card.progress
+                title: (card as Card).title, task_date: (card as Card).task_date, time: (card as Card).time,
+                details: (card as Card).details, color: (card as Card).color, progress: (card as Card).progress
             });
         }
     }, [card]);
 
-    const handleChange = (e) => setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }));
-    const handleDetailsChange = (e) => setFormData(prev => ({...prev, details: e.currentTarget.textContent}));
-    const handleDateSelect = (day) => setFormData(prev => ({...prev, day}));
+    const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }));
+    const handleDetailsChange = (e: React.FocusEvent<HTMLDivElement>) => setFormData(prev => ({...prev, details: e.currentTarget.textContent || ''}));
+    const handleDateSelect = (day: Date) => setFormData(prev => ({...prev, task_date: format(day, 'yyyy-MM-dd')}));
     const handleColorChange = (color: string) => setFormData(prev => ({ ...prev, color }));
     const handleProgressChange = (value: number) => setFormData(prev => ({ ...prev, progress: value }));
 
@@ -366,14 +397,12 @@ const CardModal = ({ card, scheduleData, onClose, onSave, onSuggestSubtasks }) =
 
     const handleSave = () => {
         if (!formData.title) return alert("Le titre est obligatoire.");
-        if (formData.day === 'Choisir une date') return alert("Veuillez choisir une date.");
-        onSave(formData, card?.id);
+        if (!formData.task_date) return alert("Veuillez choisir une date.");
+        onSave(formData, (card as Card)?.id);
     };
     
     const initialDate = () => {
-        if (!formData.day || formData.day === 'Choisir une date') return new Date(2025, 7, 1);
-        const dayNumber = parseInt(formData.day.split(' ')[1]);
-        return new Date(2025, dayNumber >= 28 ? 6 : 7, dayNumber);
+        return new Date(formData.task_date);
     };
 
     return (
@@ -389,8 +418,8 @@ const CardModal = ({ card, scheduleData, onClose, onSave, onSuggestSubtasks }) =
                 </div>
                 <div className="text-gray-700 space-y-4">
                     <div className="relative">
-                        <strong className="font-semibold">Jour :</strong>
-                        <button id="modal-edit-day" onClick={() => setShowCalendar(s => !s)} className="ml-2 p-2 border rounded-md hover:bg-gray-100">{formData.day}</button>
+                        <strong className="font-semibold">Date :</strong>
+                        <button id="modal-edit-day" onClick={() => setShowCalendar(s => !s)} className="ml-2 p-2 border rounded-md hover:bg-gray-100">{format(new Date(formData.task_date), 'eeee d MMMM', { locale: fr })}</button>
                         {showCalendar && <Calendar initialDate={initialDate()} onDateSelect={handleDateSelect} onClose={() => setShowCalendar(false)} />}
                     </div>
                      <div>
@@ -418,11 +447,11 @@ const CardModal = ({ card, scheduleData, onClose, onSave, onSuggestSubtasks }) =
     );
 };
 
-const AIModal = ({ isOpen, onClose, onGenerate }) => {
+const AIModal = ({ isOpen, onClose, onGenerate }: { isOpen: boolean, onClose: () => void, onGenerate: (prompt: string) => Promise<void> }) => {
     const [prompt, setPrompt] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     
-    const handleResult = useCallback((transcript) => {
+    const handleResult = useCallback((transcript: string) => {
         setPrompt(prev => prev ? `${prev} ${transcript}` : transcript);
     }, []);
 
@@ -466,69 +495,133 @@ const AIModal = ({ isOpen, onClose, onGenerate }) => {
 }
 
 
-const KanbanCard = ({ card, onDragStart, onClick, onUpdateCard }) => {
-    const handleProgressClick = (e) => { e.stopPropagation(); onUpdateCard({ ...card, progress: card.progress >= 100 ? 0 : card.progress + 10 }); };
-    return (<div id={card.id} className={`kanban-card p-4 rounded-lg shadow-md ${card.color}`} draggable="true" onDragStart={onDragStart} onClick={onClick}><p className="font-bold text-gray-900">{card.title}</p><p className="text-sm text-gray-700 mt-1">{card.day} - {card.time}</p><div className="mt-3 pt-2 border-t border-gray-500 border-opacity-20 cursor-pointer" onClick={handleProgressClick}><div className="flex justify-between items-center text-xs text-gray-700"><span>Progression</span><span className="font-semibold">{card.progress}%</span></div><div className="w-full bg-gray-300 bg-opacity-50 rounded-full h-1.5 mt-1"><div className={`h-1.5 rounded-full ${card.color.replace('200', '500')}`} style={{ width: `${card.progress}%` }}></div></div></div></div>);
+const KanbanCard = ({ card, onDragStart, onClick, onUpdateCard }: { card: Card, onDragStart: (e: React.DragEvent<HTMLDivElement>) => void, onClick: () => void, onUpdateCard: (card: Card) => void }) => {
+    const handleProgressClick = (e: React.MouseEvent<HTMLDivElement>) => { e.stopPropagation(); onUpdateCard({ ...card, progress: card.progress >= 100 ? 0 : card.progress + 10 }); };
+    return (<div id={card.id} className={`kanban-card p-4 rounded-lg shadow-md ${card.color}`} draggable="true" onDragStart={onDragStart} onClick={onClick}><p className="font-bold text-gray-900">{card.title}</p><p className="text-sm text-gray-700 mt-1">{format(new Date(card.task_date), 'd LLL', { locale: fr })} - {card.time}</p><div className="mt-3 pt-2 border-t border-gray-500 border-opacity-20 cursor-pointer" onClick={handleProgressClick}><div className="flex justify-between items-center text-xs text-gray-700"><span>Progression</span><span className="font-semibold">{card.progress}%</span></div><div className="w-full bg-gray-300 bg-opacity-50 rounded-full h-1.5 mt-1"><div className={`h-1.5 rounded-full ${card.color.replace('200', '500')}`} style={{ width: `${card.progress}%` }}></div></div></div></div>);
 };
 
-const KanbanColumn = ({ columnName, onDragOver, onDrop, children }) => {
-    return (<div className="kanban-column-container mb-0 md:mb-0" onDragOver={onDragOver} onDrop={onDrop} data-column-name={columnName}><div className="p-4 bg-gray-200 rounded-t-lg mb-4 shadow"><h3 className="font-semibold text-lg">{columnName}</h3></div><div className="card-container p-2 h-full md:min-h-[100px]">{children}</div></div>);
+const KanbanColumn = ({ columnName, onDragOver, onDrop, children }: { columnName: string, onDragOver: (e: React.DragEvent<HTMLDivElement>) => void, onDrop: (e: React.DragEvent<HTMLDivElement>) => void, children: React.ReactNode }) => {
+    const dayDate = new Date(columnName);
+    return (<div className="kanban-column-container mb-0 md:mb-0" onDragOver={onDragOver} onDrop={(e) => onDrop(e)} data-column-name={columnName}><div className="p-4 bg-gray-200 rounded-t-lg mb-4 shadow"><h3 className="font-semibold text-lg">{format(dayDate, 'eeee', { locale: fr })} <span className="font-normal text-gray-600">{format(dayDate, 'd')}</span></h3></div><div className="card-container p-2 h-full md:min-h-[100px]">{children}</div></div>);
+};
+
+const WeeklyHeader = ({ currentDate, setCurrentDate }: { currentDate: Date, setCurrentDate: (date: Date) => void }) => {
+    const handlePrevWeek = () => setCurrentDate(addDays(currentDate, -7));
+    const handleNextWeek = () => setCurrentDate(addDays(currentDate, 7));
+    const handleToday = () => setCurrentDate(new Date());
+
+    const start = startOfWeek(currentDate, { locale: fr });
+    const end = endOfWeek(currentDate, { locale: fr });
+    const formattedRange = `${format(start, 'd LLL', { locale: fr })} - ${format(end, 'd LLL yyyy', { locale: fr })}`;
+
+    return (
+        <header className="mb-8 flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+            <div className="flex items-center gap-4">
+                <h1 className="text-2xl md:text-3xl font-bold text-gray-900">{formattedRange}</h1>
+                <div className="flex gap-2">
+                    <button onClick={handlePrevWeek} className="p-2 rounded-full hover:bg-gray-200">&lt;</button>
+                    <button onClick={handleToday} className="px-4 py-2 text-sm font-semibold bg-gray-200 rounded-md hover:bg-gray-300">Aujourd'hui</button>
+                    <button onClick={handleNextWeek} className="p-2 rounded-full hover:bg-gray-200">&gt;</button>
+                </div>
+            </div>
+            <button onClick={() => supabase.auth.signOut()} className="bg-red-500 text-white px-4 py-2 rounded-lg hover:bg-red-600">
+                Déconnexion
+            </button>
+        </header>
+    );
 };
 
 const App = () => {
-    const { scheduleData, addCard, updateCard, moveCard, findCardLocation } = useKanbanState();
+    const [session, setSession] = useState<Session | null>(null);
+    const [currentDate, setCurrentDate] = useState(new Date());
+
+    useEffect(() => {
+        supabase.auth.getSession().then(({ data: { session } }) => {
+            setSession(session);
+        });
+
+        const {
+            data: { subscription },
+        } = supabase.auth.onAuthStateChange((_event, session) => {
+            setSession(session);
+        });
+
+        return () => subscription.unsubscribe();
+    }, []);
+
+
+    const { scheduleData, weekDays, addCard, updateCard, moveCard, findCardLocation } = useKanbanState(session, currentDate);
     const [editingCard, setEditingCard] = useState<Card | 'new' | null | Partial<Card>>(null);
     const [isAIModalOpen, setIsAIModalOpen] = useState(false);
     const [conflict, setConflict] = useState<{isOpen: boolean; onConfirm: (() => void) | null}>({ isOpen: false, onConfirm: null });
     const draggedItem = useRef<{cardId: string} | null>(null);
 
-    const handleDragStart = (e, cardId) => { draggedItem.current = { cardId }; e.dataTransfer.effectAllowed = 'move'; setTimeout(() => e.currentTarget.classList.add('dragging'), 0); };
-    const handleDragEnd = (e) => { e.target.classList.remove('dragging'); draggedItem.current = null; };
-    const handleDragOver = (e) => e.preventDefault();
-    const getDragAfterElement = (container, y) => {
+    const handleDragStart = (e: React.DragEvent<HTMLDivElement>, cardId: string) => { 
+        draggedItem.current = { cardId }; 
+        e.dataTransfer.effectAllowed = 'move'; 
+        (e.target as HTMLDivElement).classList.add('dragging');
+    };
+    const handleDragEnd = (e: React.DragEvent<HTMLDivElement>) => { 
+        (e.target as HTMLDivElement).classList.remove('dragging'); 
+        draggedItem.current = null; 
+    };
+    const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => e.preventDefault();
+    const getDragAfterElement = (container: HTMLDivElement, y: number): Element | undefined => {
         const draggableElements = [...container.querySelectorAll('.kanban-card:not(.dragging)')];
+        const initial: { offset: number, element?: Element } = { offset: Number.NEGATIVE_INFINITY };
         return draggableElements.reduce((closest, child) => {
             const box = child.getBoundingClientRect();
             const offset = y - box.top - box.height / 2;
-            if (offset < 0 && offset > closest.offset) return { offset: offset, element: child };
+            if (offset < 0 && offset > closest.offset) {
+                return { offset: offset, element: child };
+            }
             return closest;
-        }, { offset: Number.NEGATIVE_INFINITY }).element;
+        }, initial).element;
     };
-    const handleDrop = (e, targetColumnName) => {
+    const handleDrop = (e: React.DragEvent<HTMLDivElement>, targetColumnName: string) => {
         e.preventDefault();
         if (!draggedItem.current) return;
         const { cardId } = draggedItem.current;
-        const afterElement = getDragAfterElement(e.currentTarget, e.clientY);
-        const location = findCardLocation(afterElement?.id);
-        moveCard(cardId, targetColumnName, location ? location.cardIndex : null);
+        moveCard(cardId, targetColumnName);
     };
 
-    const handleSaveCard = (formData, cardId) => {
+    const handleSaveCard = (formData: Omit<Card, 'id' | 'user_id' | 'created_at'>, cardId?: string) => {
         const isNew = !cardId;
-        const currentCardId = isNew ? `card-${Date.now()}` : cardId;
         
-        const newCardData: Card = { ...formData, id: currentCardId };
-
-        let hasConflict = false;
-        for (const colName in scheduleData) {
-            for (const card of scheduleData[colName]) {
-                if (card.id === currentCardId) continue;
-                if (card.day === newCardData.day && (card.time === 'Toute la journée' || newCardData.time === 'Toute la journée' || card.time === newCardData.time)) {
-                    hasConflict = true; break;
-                }
-            }
-            if (hasConflict) break;
-        }
+        const cardData = { ...formData };
 
         const performSave = () => {
-            if (isNew) addCard(newCardData);
-            else updateCard(newCardData);
+            if (isNew) {
+                addCard(cardData);
+            } else if (cardId) {
+                const location = findCardLocation(cardId);
+                if (location) {
+                    const cardToUpdate: Card = {
+                        ...location.card,
+                        ...formData,
+                        id: cardId,
+                    };
+                    updateCard(cardToUpdate);
+                }
+            }
             setEditingCard(null);
             setConflict({ isOpen: false, onConfirm: null });
         };
 
-        if (hasConflict) setConflict({ isOpen: true, onConfirm: () => performSave() });
-        else performSave();
+        if (isNew) { 
+            let hasConflict = false;
+            // Simplified conflict check - check if any card exists at the same date and time
+            const targetDayTasks = scheduleData[format(new Date(formData.task_date), 'yyyy-MM-dd')] || [];
+            for (const card of targetDayTasks) {
+                if (card.time === 'Toute la journée' || formData.time === 'Toute la journée' || card.time === formData.time) {
+                    hasConflict = true; break;
+                }
+            }
+            if (hasConflict) setConflict({ isOpen: true, onConfirm: () => performSave() });
+            else performSave();
+        } else {
+            performSave();
+        }
     };
 
     const handleAIGenerate = async (prompt: string) => {
@@ -539,7 +632,11 @@ const App = () => {
                 config: { responseMimeType: "application/json", responseSchema: cardSchema }
             });
             const cardData = JSON.parse(result.text);
-            setEditingCard({ ...cardData });
+            if(cardData.title && cardData.task_date && cardData.time) {
+                setEditingCard({ ...cardData, color: 'bg-teal-200', progress: 0 });
+            } else {
+                 alert("L'IA n'a pas pu générer une tâche complète. Veuillez réessayer.");
+            }
         } catch (error) {
             console.error("Error generating card with AI:", error);
             alert("Une erreur est survenue lors de la communication avec l'IA. Veuillez réessayer.");
@@ -562,23 +659,56 @@ const App = () => {
         }
     };
 
+    if (!session) {
+        return (
+            <div className="flex justify-center items-center h-screen bg-gray-100">
+                <div className="w-full max-w-md p-8 bg-white shadow-lg rounded-lg">
+                     <h1 className="text-2xl md:text-3xl font-bold text-gray-900 text-center mb-6">AIgenda</h1>
+                    <Auth
+                        supabaseClient={supabase}
+                        appearance={{ theme: ThemeSupa }}
+                        providers={['google', 'github']}
+                        theme="light"
+                        localization={{
+                            variables: {
+                                sign_in: {
+                                    email_label: 'Adresse e-mail',
+                                    password_label: 'Mot de passe',
+                                    button_label: 'Se connecter',
+                                    social_provider_text: 'Se connecter avec {{provider}}',
+                                    link_text: 'Déjà un compte ? Connectez-vous',
+                                },
+                                sign_up: {
+                                    email_label: 'Adresse e-mail',
+                                    password_label: 'Mot de passe',
+                                    button_label: 'S\'inscrire',
+                                    social_provider_text: 'S\'inscrire avec {{provider}}',
+                                    link_text: 'Pas de compte ? Inscrivez-vous',
+                                }
+                            }
+                        }}
+                    />
+                </div>
+            </div>
+        )
+    }
+
     return (
         <div className="p-4 md:p-8">
-            <header className="mb-8 flex flex-col sm:flex-row justify-between sm:items-center gap-4">
-                 <div>
-                    <h1 className="text-2xl md:text-3xl font-bold text-gray-900">Planning d'Août</h1>
-                    <p className="text-sm md:text-base text-gray-600 mt-1">Les modifications sont sauvegardées automatiquement.</p>
-                </div>
-            </header>
+            <WeeklyHeader currentDate={currentDate} setCurrentDate={setCurrentDate} />
 
             <main id="kanban-board" className="kanban-board pb-4" onDragEnd={handleDragEnd}>
-                {Object.entries(scheduleData).map(([columnName, cards]) => (
-                    <KanbanColumn key={columnName} columnName={columnName} onDragOver={handleDragOver} onDrop={(e) => handleDrop(e, columnName)}>
-                       {cards.map(card => (<KanbanCard key={card.id} card={card} onDragStart={(e) => handleDragStart(e, card.id)} onClick={() => setEditingCard(card)} onUpdateCard={updateCard} />))}
-                    </KanbanColumn>
-                ))}
+                {weekDays.map(day => {
+                    const dayStr = format(day, 'yyyy-MM-dd');
+                    const cards = scheduleData[dayStr] || [];
+                    return (
+                        <KanbanColumn key={dayStr} columnName={dayStr} onDragOver={handleDragOver} onDrop={(e) => handleDrop(e, dayStr)}>
+                           {cards.map(card => (<KanbanCard key={card.id} card={card} onDragStart={(e) => handleDragStart(e, card.id)} onClick={() => setEditingCard(card)} onUpdateCard={updateCard} />))}
+                        </KanbanColumn>
+                    )
+                })}
             </main>
-
+            
             <div className="fixed bottom-8 right-8 z-40 flex flex-col items-center gap-4">
                 <button onClick={() => setIsAIModalOpen(true)} className="bg-blue-500 text-white w-14 h-14 rounded-full flex items-center justify-center shadow-lg hover:bg-blue-600 transition-transform transform hover:scale-110" aria-label="Créer avec l'IA">
                     <svg xmlns="http://www.w3.org/2000/svg" className="h-7 w-7" viewBox="0 0 24 24" fill="currentColor">
@@ -602,4 +732,5 @@ const App = () => {
 };
 
 const root = ReactDOM.createRoot(document.getElementById('root') as HTMLElement);
+root.render(<StrictMode><App /></StrictMode>);
 root.render(<StrictMode><App /></StrictMode>);
