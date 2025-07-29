@@ -626,12 +626,14 @@ const App = () => {
         const performSave = () => {
             if (isNew) {
                 addCard(cardData);
-            } else if (typeof cardId === 'string') {
+            } else {
+                // @ts-ignore
                 const location = findCardLocation(cardId);
                 if (location) {
                     const cardToUpdate: Card = {
                         ...location.card,
                         ...formData,
+                        // @ts-ignore
                         id: cardId,
                     };
                     updateCard(cardToUpdate);
